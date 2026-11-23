@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nexus AI — Live Search & Cricket</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+    body { background: #0b0f19; color: #f1f5f9; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 24px 16px; }
+    .container { width: 100%; max-width: 780px; }
+    header { text-align: center; margin-bottom: 24px; }
+    header h1 { font-size: 1.8rem; background: linear-gradient(90deg, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    header p { color: #94a3b8; font-size: 0.9rem; margin-top: 6px; }
+    .search-box { background: #131b2e; border: 1px solid #1e293b; border-radius: 14px; padding: 14px; display: flex; flex-wrap: wrap; gap: 10px; box-shadow: 0 10px 25px rgba(0,0,0,0.35); }
+    select, input { background: #0b0f19; color: #f8fafc; border: 1px solid #334155; border-radius: 10px; padding: 12px 14px; font-size: 0.95rem; outline: none; }
+    select { flex: 1 1 190px; cursor: pointer; }
+    input { flex: 3 1 280px; }
+    input:focus, select:focus { border-color: #38bdf8; }
+    button { flex: 1 1 110px; background: linear-gradient(135deg, #0284c7, #4f46e5); color: #fff; border: none; border-radius: 10px; padding: 12px 18px; font-weight: 600; font-size: 0.95rem; cursor: pointer; transition: opacity 0.2s; }
+    button:hover { opacity: 0.9; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status { margin-top: 14px; font-size: 0.88rem; color: #38bdf8; min-height: 20px; }
+    .card { background: #131b2e; border: 1px solid #1e293b; border-radius: 14px; padding: 18px; margin-top: 16px; line-height: 1.6; }
+    .card h2 { font-size: 1rem; color: #38bdf8; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .overview-text { font-size: 1.02rem; color: #e2e8f0; }
+    .result-item { padding: 12px 0; border-bottom: 1px solid #1e293b; }
+    .result-item:last-child { border-bottom: none; }
+    .result-title { color: #60a5fa; text-decoration: none; font-weight: 600; font-size: 1rem; display: block; margin-bottom: 4px; }
+    .result-title:hover { text-decoration: underline; }
+    .result-meta { font-size: 0.78rem; color: #94a3b8; margin-bottom: 4px; }
+    .result-snippet { font-size: 0.9rem; color: #cbd5e1; }
+    .match-card { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+    .match-series { font-size: 0.78rem; color: #38bdf8; font-weight: 600; }
+    .match-title { font-size: 1rem; font-weight: 700; margin: 4px 0; }
+    .match-status { font-size: 0.85rem; color: #fbbf24; margin-bottom: 8px; }
+    .team-row { display: flex; justify-content: space-between; font-size: 0.92rem; padding: 3px 0; }
+    .error { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Nexus AI Live Search</h1>
+      <p>Powered by your Render API • Real-Time AI Overview, News & Live Cricket</p>
+    </header>
+
+    <div class="search-box">
+      <select id="mode">
+        <option value="AI Overview + Full Google Search">AI Overview</option>
+        <option value="Live Cricket Scores (Real-Time)">Live Cricket Scores</option>
+        <option value="Google News (Live Headlines)">Google News</option>
+        <option value="Google Finance (Stock/Crypto Quote)">Google Finance</option>
+        <option value="Google Trends (Trending Now)">Google Trends</option>
+        <option value="Google Autocomplete">Google Autocomplete</option>
+      </select>
+      <input id="query" type="text" placeholder="Ask anything or enter a team (e.g. India vs New Zealand)..." />
+      <button id="searchBtn" onclick="runSearch()">Search</button>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div id="output"></div>
+  </div>
+
+  <script>
+    const API_BASE = "https://live-search-api-ul4w.onrender.com";
+    const API_KEY = "sk-free-9bb1fa4d46124783849993210238dd1e";
+
+    document.getElementById("query").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") runSearch();
+    });
+
+    async function runSearch() {
+      const mode = document.getElementById("mode").value;
+      const query = document.getElementById("query").value.trim();
+      const statusEl = document.getElementById("status");
+      const outputEl = document.getElementById("output");
+      const btn = document.getElementById("searchBtn");
+
+      if (!query && mode !== "Live Cricket Scores (Real-Time)" && mode !== "Google Trends (Trending Now)") {
+        statusEl.innerHTML = '<span class="error">Please enter a search query.</span>';
+        return;
+      }
+
+      btn.disabled = true;
+      statusEl.textContent = "Fetching live data from Render (may take ~30s if server was sleeping)...";
+      outputEl.innerHTML = "";
+
+      try {
+        // Step 1: Submit job to Gradio API
+        const postRes = await fetch(`${API_BASE}/gradio_api/call/unified_search`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data: [query, mode, API_KEY] })
+        });
+
+        if (!postRes.ok) throw new Error(`HTTP ${postRes.status}`);
+        const { event_id } = await postRes.json();
+
+        // Step 2: Read SSE result stream
+        const streamRes = await fetch(`${API_BASE}/gradio_api/call/unified_search/${event_id}`);
+        const rawText = await streamRes.text();
+        const dataLine = rawText.split("\n").reverse().find(line => line.startsWith("data: "));
+        if (!dataLine) throw new Error("No data returned from server.");
+
+        const payload = JSON.parse(dataLine.replace("data: ", ""))[0];
+        statusEl.textContent = "";
+        renderResponse(payload, mode);
+      } catch (err) {
+        statusEl.innerHTML = `<span class="error">Error: ${err.message}</span>`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function renderResponse(data, mode) {
+      const outputEl = document.getElementById("output");
+
+      if (data.error) {
+        outputEl.innerHTML = `<div class="card error"><strong>Error:</strong> ${data.error}</div>`;
+        return;
+      }
+
+      // 1. Render AI Overview Answer
+      if (data.ai_overview) {
+        let html = `
+          <div class="card">
+            <h2>AI Overview</h2>
+            <div class="overview-text">${escapeHtml(data.ai_overview)}</div>
+          </div>`;
+
+        if (Array.isArray(data.organic_results) && data.organic_results.length > 0) {
+          html += `<div class="card"><h2>Sources</h2>`;
+          data.organic_results.forEach(item => {
+            html += `
+              <div class="result-item">
+                <a class="result-title" href="${item.url}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>
+                ${item.source ? `<div class="result-meta">${escapeHtml(item.source)}</div>` : ""}
+                <div class="result-snippet">${escapeHtml(item.snippet || "")}</div>
+              </div>`;
+          });
+          html += `</div>`;
+        }
+        outputEl.innerHTML = html;
+        return;
+      }
+
+      // 2. Render Live Cricket Scorecards
+      if (data.matches) {
+        if (data.matches.length === 0) {
+          outputEl.innerHTML = `<div class="card">No live matches matched that filter right now. Try leaving the query blank to see all active matches.</div>`;
+          return;
+        }
+        let html = `<div class="card"><h2>Live Cricket Matches (${data.count})</h2>`;
+        data.matches.forEach(m => {
+          const teamsHtml = (m.scores || []).map(t =>
+            `<div class="team-row"><span>${escapeHtml(t.team)}</span><strong>${escapeHtml(t.score)}</strong></div>`
+          ).join("");
+          html += `
+            <div class="match-card">
+              <div class="match-series">${escapeHtml(m.series)}</div>
+              <div class="match-title">${escapeHtml(m.match)}</div>
+              <div class="match-status">${escapeHtml(m.status)}</div>
+              ${teamsHtml}
+            </div>`;
+        });
+        html += `</div>`;
+        outputEl.innerHTML = html;
+        return;
+      }
+
+      // 3. Fallback clean formatter for News / Finance / Trends / Autocomplete
+      outputEl.innerHTML = `<div class="card"><h2>${escapeHtml(mode)}</h2><pre style="white-space:pre-wrap;font-size:0.88rem;color:#cbd5e1;">${escapeHtml(JSON.stringify(data, null, 2))}</pre></div>`;
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+  </script>
+</body>
+</html>

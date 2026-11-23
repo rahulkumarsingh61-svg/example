@@ -27,7 +27,7 @@
     .result-item:last-child { border-bottom: none; }
     .result-title { color: #60a5fa; text-decoration: none; font-weight: 600; font-size: 1rem; display: block; margin-bottom: 4px; }
     .result-title:hover { text-decoration: underline; }
-    .result-meta { font-size: 0.78rem; color: #94a3b8; margin-bottom: 4px; }
+    .result-meta { font-size: 0.8rem; color: #38bdf8; margin-bottom: 4px; font-weight: 500; }
     .result-snippet { font-size: 0.9rem; color: #cbd5e1; }
     .match-card { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
     .match-series { font-size: 0.78rem; color: #38bdf8; font-weight: 600; }
@@ -69,6 +69,18 @@
       if (e.key === "Enter") runSearch();
     });
 
+    function getSourceName(source) {
+      if (!source) return "";
+      if (typeof source === "object") return source.name || source.title || "";
+      return String(source);
+    }
+
+    function cleanOverviewText(text) {
+      return String(text || "")
+        .replace(/\(\{'name':\s*'([^']+)',\s*'link':\s*'[^']+'\}\)/g, "($1)")
+        .replace(/\(\{"name":\s*"([^"]+)",\s*"link":\s*"[^"]+"\}\)/g, "($1)");
+    }
+
     async function runSearch() {
       const mode = document.getElementById("mode").value;
       const query = document.getElementById("query").value.trim();
@@ -86,7 +98,6 @@
       outputEl.innerHTML = "";
 
       try {
-        // Step 1: Submit job to Gradio API
         const postRes = await fetch(`${API_BASE}/gradio_api/call/unified_search`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -96,7 +107,6 @@
         if (!postRes.ok) throw new Error(`HTTP ${postRes.status}`);
         const { event_id } = await postRes.json();
 
-        // Step 2: Read SSE result stream
         const streamRes = await fetch(`${API_BASE}/gradio_api/call/unified_search/${event_id}`);
         const rawText = await streamRes.text();
         const dataLine = rawText.split("\n").reverse().find(line => line.startsWith("data: "));
@@ -116,25 +126,26 @@
       const outputEl = document.getElementById("output");
 
       if (data.error) {
-        outputEl.innerHTML = `<div class="card error"><strong>Error:</strong> ${data.error}</div>`;
+        outputEl.innerHTML = `<div class="card error"><strong>Error:</strong> ${escapeHtml(data.error)}</div>`;
         return;
       }
 
-      // 1. Render AI Overview Answer
+      // 1. Render AI Overview Answer + Clean Sources
       if (data.ai_overview) {
         let html = `
           <div class="card">
             <h2>AI Overview</h2>
-            <div class="overview-text">${escapeHtml(data.ai_overview)}</div>
+            <div class="overview-text">${escapeHtml(cleanOverviewText(data.ai_overview))}</div>
           </div>`;
 
         if (Array.isArray(data.organic_results) && data.organic_results.length > 0) {
           html += `<div class="card"><h2>Sources</h2>`;
           data.organic_results.forEach(item => {
+            const srcName = getSourceName(item.source);
             html += `
               <div class="result-item">
                 <a class="result-title" href="${item.url}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>
-                ${item.source ? `<div class="result-meta">${escapeHtml(item.source)}</div>` : ""}
+                ${srcName ? `<div class="result-meta">${escapeHtml(srcName)}</div>` : ""}
                 <div class="result-snippet">${escapeHtml(item.snippet || "")}</div>
               </div>`;
           });
@@ -144,7 +155,26 @@
         return;
       }
 
-      // 2. Render Live Cricket Scorecards
+      // 2. Render Google News Articles cleanly
+      const articles = data.articles || data.news || data.results;
+      if (Array.isArray(articles)) {
+        let html = `<div class="card"><h2>${escapeHtml(mode)}</h2>`;
+        articles.forEach(item => {
+          const srcName = getSourceName(item.source);
+          const link = item.link || item.url || "#";
+          html += `
+            <div class="result-item">
+              <a class="result-title" href="${link}" target="_blank" rel="noopener">${escapeHtml(item.title || "")}</a>
+              ${srcName ? `<div class="result-meta">${escapeHtml(srcName)}${item.published ? " • " + escapeHtml(item.published) : ""}</div>` : ""}
+              ${item.snippet ? `<div class="result-snippet">${escapeHtml(item.snippet)}</div>` : ""}
+            </div>`;
+        });
+        html += `</div>`;
+        outputEl.innerHTML = html;
+        return;
+      }
+
+      // 3. Render Live Cricket Scorecards
       if (data.matches) {
         if (data.matches.length === 0) {
           outputEl.innerHTML = `<div class="card">No live matches matched that filter right now. Try leaving the query blank to see all active matches.</div>`;
@@ -168,7 +198,7 @@
         return;
       }
 
-      // 3. Fallback clean formatter for News / Finance / Trends / Autocomplete
+      // 4. Fallback clean formatter for Finance / Trends / Autocomplete
       outputEl.innerHTML = `<div class="card"><h2>${escapeHtml(mode)}</h2><pre style="white-space:pre-wrap;font-size:0.88rem;color:#cbd5e1;">${escapeHtml(JSON.stringify(data, null, 2))}</pre></div>`;
     }
 
